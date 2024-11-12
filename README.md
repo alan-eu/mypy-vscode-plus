@@ -1,4 +1,17 @@
+# 🍴 ⚠️ This is a fork
+
+This is a fork of Matan Gover's mypy extension with a few extras, including:
+
+- Support for environment variables (`mypy.envFile`, `mypy.env`), originally from this PR: https://github.com/matangover/mypy-vscode/pull/101
+- Support for root definition (`mypy.roots`), originally from this PR: https://github.com/matangover/mypy-vscode/pull/100
+- And a few fixes for both.
+
+Original README below.
+
+---
+
 # Mypy extension for VS Code
+
 Runs mypy on Python code to provide type checking.
 
 * Runs on your entire workspace. (This is different from Microsoft's Python extension's mypy functionality which only lints each file separately, leading to incomplete type checking.)

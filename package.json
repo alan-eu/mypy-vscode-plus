@@ -1,11 +1,11 @@
 {
     "name": "mypy",
-    "displayName": "Mypy",
-    "description": "Type checking for Python using mypy",
+    "displayName": "Mypy (fork)",
+    "description": "Type checking for Python using mypy - fork with extra features",
     "author": "Matan Gover",
     "repository": {
         "type": "git",
-        "url": "https://github.com/matangover/mypy-vscode"
+        "url": "https://github.com/mstmb-alan/mypy-vscode-plus"
     },
     "license": "MIT",
     "version": "0.5.0-fork",
