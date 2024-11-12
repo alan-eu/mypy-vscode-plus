@@ -1,16 +1,16 @@
-import * as vscode from 'vscode';
-import * as path from 'path';
-import * as crypto from 'crypto';
+import * as AsyncLock from 'async-lock';
 import { spawn } from 'child-process-promise';
+import * as crypto from 'crypto';
+import { parse } from 'envfile';
 import * as fs from 'fs';
 import { lookpath } from 'lookpath';
-import untildify = require('untildify');
-import { parse } from 'envfile';
-import { quote } from 'shlex';
-import * as AsyncLock from 'async-lock';
+import * as path from 'path';
 import * as allSettled from 'promise.allsettled';
-import {MypyOutputLine, mypyOutputPattern} from './mypy';
-import {IExtensionApi, ActiveEnvironmentPathChangeEvent} from './python';
+import { quote } from 'shlex';
+import * as vscode from 'vscode';
+import { MypyOutputLine, mypyOutputPattern } from './mypy';
+import { ActiveEnvironmentPathChangeEvent, IExtensionApi } from './python';
+import untildify = require('untildify');
 import ProcessEnv = NodeJS.ProcessEnv;
 
 const diagnostics = new Map<vscode.Uri, vscode.DiagnosticCollection>();
@@ -79,7 +79,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	// Do _not_ await this call on purpose, so that extension activation finishes quickly. This is
 	// important because if VS Code is closed before the checks are done, deactivate will only be
 	// called if activate has already finished.
-	forEachFolder(vscode.workspace.workspaceFolders, folder => checkWorkspace(folder.uri));
+	forEachRoot(folder => checkWorkspace(folder));
 
 	// Similarly, do not await this too.
 	checkAllNotebooks()
@@ -105,7 +105,7 @@ function initDebugLog(context: vscode.ExtensionContext) {
 export async function deactivate(): Promise<void> {
 	activated = false;
 	output(`Mypy extension deactivating, shutting down daemons...`);
-	await forEachFolder(vscode.workspace.workspaceFolders, folder => stopDaemon(folder.uri));
+	await forEachRoot(folder => stopDaemon(folder));
 	output(`Mypy daemons stopped, extension deactivated`);
 	vscode.commands.executeCommand("setContext", "mypy.activated", false);
 }
@@ -114,12 +114,12 @@ async function workspaceFoldersChanged(e: vscode.WorkspaceFoldersChangeEvent): P
 	const format = (folders: readonly vscode.WorkspaceFolder[]) => folders.map(f => f.name).join(", ") || "none";
 	output(`Workspace folders changed. Added: ${format(e.added)}. Removed: ${format(e.removed)}.`);
 
-	await forEachFolder(e.removed, async folder => {
-		await stopDaemon(folder.uri);
-		diagnostics.get(folder.uri)?.dispose();
-		diagnostics.delete(folder.uri);
+	await forEachRoot(async folder => {
+		await stopDaemon(folder);
+		diagnostics.get(folder)?.dispose();
+		diagnostics.delete(folder);
 	});
-	await forEachFolder(e.added, folder => checkWorkspace(folder.uri));
+	await forEachRoot(folder => checkWorkspace(folder));
 }
 
 async function forEachFolder<T extends vscode.Uri | vscode.WorkspaceFolder>(
@@ -251,7 +251,7 @@ async function runDmypy(
 		args.push("--", ...mypyArgs);
 	}
 	const command = [executable, ...args].map(quote).join(" ");
-	output(`Running dmypy in folder ${folder.fsPath}\n${command}`, currentCheck);
+	output(`Running dmypy in folder ${folder.fsPath}\n${command}\nEnvironment variables: ${JSON.stringify(envVars)}`, currentCheck);
 	try {
 		const result = await spawn(
 			executable,
@@ -365,8 +365,12 @@ async function getExecutableAndArgs(folder: vscode.Uri, currentCheck: number | u
 	const envFileConfig = mypyConfig.get<string>('envFile');
 	let envVars: ProcessEnv = {};
 	if (envFileConfig) {
-		const envFile = untildify(envFileConfig).replace('${workspaceFolder}', folder.fsPath);
+		const envFile = untildify(envFileConfig).replace('${workspaceFolder}', vscode.workspace.getWorkspaceFolder(folder)!.uri.fsPath);
 		envVars = await loadEnv(envFile);
+	}
+	const configEnvVars = mypyConfig.get<{[key: string]: string}>('env', {});
+	for (const envVarKey of Object.keys(configEnvVars)) {
+		envVars[envVarKey] = configEnvVars[envVarKey].replace('${workspaceFolder}', vscode.workspace.getWorkspaceFolder(folder)!.uri.fsPath);
 	}
 	let executable: string | undefined;
 	const runUsingActiveInterpreter = mypyConfig.get<boolean>('runUsingActiveInterpreter');
@@ -407,26 +411,49 @@ async function killDaemon(folder: vscode.Uri, currentCheck: number | undefined, 
 		output("No status file to delete", currentCheck);
 	}
 }
+function getWorkspaceOrRootFolder(file: vscode.Uri): vscode.Uri | undefined {
+	// if the user has chosen custom roots with `mypy.roots`, and there is only one workspace folder, check those roots.
+	const mypyConfig = vscode.workspace.getConfiguration('mypy');
+	const roots = mypyConfig.get<string[]>("roots", []);
+	const normalizedFilePath = path.normalize(file.fsPath);
+	if (roots.length > 0 && vscode.workspace.workspaceFolders?.length === 1) {
+		const base = vscode.workspace.workspaceFolders[0];
+		const folders = roots.map(root => vscode.Uri.file(path.join(base.uri.fsPath, root)));
+		for (const folder of folders) {
+			const normalizedRootPath = path.normalize(folder.fsPath);
+			if (normalizedFilePath.startsWith(normalizedRootPath)) {
+				return folder
+			}
+		}
+		output(`Error: Base not found for URI ${file}`)
+		return undefined; 
+	} else {
+		return vscode.workspace.getWorkspaceFolder(file)?.uri;
+	}
+}
 
-async function recheckWorkspace() {
+async function forEachRoot(func: (folder: vscode.Uri) => Promise<any>) {
 	// if the user has chosen custom roots with `mypy.roots`, and there is only one workspace folder, check those roots.
 	const mypyConfig = vscode.workspace.getConfiguration('mypy');
 	const roots = mypyConfig.get<string[]>("roots", []);
 	if (roots.length > 0 && vscode.workspace.workspaceFolders?.length === 1) {
-		output("Rechecking custom roots");
+		
 		const base = vscode.workspace.workspaceFolders[0];
 		const folders = roots.map(root => vscode.Uri.file(path.join(base.uri.fsPath, root)));
-		await forEachFolder(folders, folder => checkWorkspace(folder));
+		await forEachFolder(folders, func);
 	} else {
-		output("Rechecking workspace");
-		await forEachFolder(vscode.workspace.workspaceFolders, folder => checkWorkspace(folder.uri));
+		await forEachFolder(vscode.workspace.workspaceFolders?.map(it => it.uri), func);
 	}
+}
+
+async function recheckWorkspace() {
+	await forEachRoot(folder => checkWorkspace(folder));
 	output("Recheck complete");
 }
 
 async function restartAndRecheckWorkspace() {
 	output("Stopping daemons");
-	await forEachFolder(vscode.workspace.workspaceFolders, folder => stopDaemon(folder.uri));
+	await forEachRoot(folder => stopDaemon(folder));
 	await recheckWorkspace();
 }
 
@@ -524,7 +551,7 @@ async function checkNotebookInternal(notebook: vscode.NotebookDocument, folder: 
 	const args = [...executionArgs, ...mypyFormatArgs, ...mypyArgs, "-c", concatenatedCode];
 	const argsForPrint = [...args.slice(0, -1), `<< code (${concatenatedCodeLines.length} lines) >>`];
 	const command = [executable, ...argsForPrint].map(quote).join(" ");
-	output(`Running mypy in folder ${folder.fsPath}\n${command}`, currentCheck);
+	output(`Running mypy in folder ${folder.fsPath}\n${command}\nEnv variables: ${JSON.stringify(envVars)}`, currentCheck);
 	let spawnResult;
 	try {
 		spawnResult = await spawn(
@@ -641,7 +668,7 @@ function getCellDiagnostics(mypyOutput: Map<vscode.Uri, vscode.Diagnostic[]>, co
 }
 
 async function documentSaved(document: vscode.TextDocument): Promise<void> {
-	const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+	const folder = getWorkspaceOrRootFolder(document.uri);
 	if (!folder) {
 		return;
 	}
@@ -649,15 +676,15 @@ async function documentSaved(document: vscode.TextDocument): Promise<void> {
 	const configChanged = isMaybeConfigFile(folder, document.fileName);
 	if (document.languageId == "python" || configChanged) {
 		output(`Document saved: ${document.uri.fsPath}`);
-		await checkWorkspace(folder.uri);
+		await checkWorkspace(folder);
 	}
 	if (configChanged) {
 		output("Config file saved, checking notebooks");
-		await checkFolderNotebooks(folder.uri);
+		await checkFolderNotebooks(folder);
 	}
 }
 
-function isMaybeConfigFile(folder: vscode.WorkspaceFolder, file: string) {
+function isMaybeConfigFile(folder: vscode.Uri, file: string) {
 	if (isConfigFileName(file)) {
 		return true;
 	}
@@ -667,7 +694,7 @@ function isMaybeConfigFile(folder: vscode.WorkspaceFolder, file: string) {
 		return false;
 	}
 	if (!path.isAbsolute(configFile)) {
-		configFile = path.join(folder.uri.fsPath, configFile);
+		configFile = path.join(folder.fsPath, configFile);
 	}
 	return path.normalize(configFile) == path.normalize(file);
 }
@@ -685,8 +712,7 @@ async function configurationChanged(event: vscode.ConfigurationChangeEvent): Pro
 	}
 	const affectedFoldersString = affectedFolders.map(f => f.uri.fsPath).join(", ");
 	output(`Mypy settings changed: ${affectedFoldersString}`);
-	await forEachFolder(affectedFolders, folder => checkWorkspace(folder.uri));
-	await forEachFolder(affectedFolders, folder => checkFolderNotebooks(folder.uri));
+	await forEachRoot(folder => checkWorkspace(folder));  // TODO Smarter based on affectedFolders
 }
 
 async function checkWorkspace(folder: vscode.Uri) {
@@ -881,12 +907,13 @@ function createDiagnostic(line: MypyOutputLine) {
 }
 
 function getWorkspaceDiagnostics(folder: vscode.Uri): vscode.DiagnosticCollection {
-	let workspaceDiagnostics = diagnostics.get(folder);
+	const workspaceDiagnosticsFolder = vscode.workspace.getWorkspaceFolder(folder)!.uri;
+	let workspaceDiagnostics = diagnostics.get(workspaceDiagnosticsFolder);
 	if (workspaceDiagnostics) {
 		return workspaceDiagnostics;
 	} else {
 		const workspaceDiagnostics = vscode.languages.createDiagnosticCollection('mypy');
-		diagnostics.set(folder, workspaceDiagnostics);
+		diagnostics.set(workspaceDiagnosticsFolder, workspaceDiagnostics);
 		_context!.subscriptions.push(workspaceDiagnostics);
 		return workspaceDiagnostics;
 	}
@@ -1007,22 +1034,23 @@ async function filesCreated(e: vscode.FileCreateEvent) {
 	await filesChanged(e.files, true);
 }
 
+
 async function filesChanged(files: readonly vscode.Uri[], created = false) {
 	const folders = new Set<vscode.Uri>()
 	for (let file of files) {
-		const folder = vscode.workspace.getWorkspaceFolder(file);
+		const folder = getWorkspaceOrRootFolder(file);
 		if (folder === undefined)
 			continue;
 
 		const path = file.fsPath;
 		if (path.endsWith(".py") || path.endsWith(".pyi") || path.endsWith(".ipynb")) {
-			folders.add(folder.uri);
+			folders.add(folder);
 		} else if (isMaybeConfigFile(folder, path)) {
 			// Don't trigger mypy run if config file has just been created and is empty, because
 			// mypy would error. Give the user a chance to edit the file.
 			const justCreatedAndEmpty = created && fs.statSync(path).size === 0;
 			if (!justCreatedAndEmpty) {
-				folders.add(folder.uri);
+				folders.add(folder);
 			}
 		}
 	}
