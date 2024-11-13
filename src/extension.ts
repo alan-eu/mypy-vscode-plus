@@ -36,7 +36,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	activated = true;
 	_context = context;
 	context.subscriptions.push(outputChannel);
-	const extension = vscode.extensions.getExtension('matangover.mypy');
+	const extension = vscode.extensions.getExtension('mstmb-alan.mypy');
 	const currentVersion = extension?.packageJSON.version;
 	context.globalState.update('extensionVersion', currentVersion);
 
