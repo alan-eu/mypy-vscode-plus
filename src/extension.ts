@@ -425,7 +425,6 @@ function getWorkspaceOrRootFolder(file: vscode.Uri): vscode.Uri | undefined {
 				return folder
 			}
 		}
-		output(`Error: Base not found for URI ${file}`)
 		return undefined; 
 	} else {
 		return vscode.workspace.getWorkspaceFolder(file)?.uri;
