@@ -436,7 +436,6 @@ async function forEachRoot(func: (folder: vscode.Uri) => Promise<any>) {
 	const mypyConfig = vscode.workspace.getConfiguration('mypy');
 	const roots = mypyConfig.get<string[]>("roots", []);
 	if (roots.length > 0 && vscode.workspace.workspaceFolders?.length === 1) {
-		
 		const base = vscode.workspace.workspaceFolders[0];
 		const folders = roots.map(root => vscode.Uri.file(path.join(base.uri.fsPath, root)));
 		await forEachFolder(folders, func);
@@ -968,11 +967,13 @@ async function getPythonPathFromPythonExtension(
 function activeInterpreterChanged(e: ActiveEnvironmentPathChangeEvent) {
 	const resource = e.resource;
 	if (resource === undefined) {
-		output(`Active interpreter changed for resource: unknown`);
-		vscode.workspace.workspaceFolders?.map(folder => checkWorkspace(folder.uri));
+		output(`Active interpreter changed for resource: unknown. New intepreter: ${e.path}`);
+		forEachRoot(folder => checkWorkspace(folder));
+		vscode.workspace.workspaceFolders?.map(folder => checkWorkspace(folder.uri)); // FIXME
 	} else {
-		output(`Active interpreter changed for resource: ${resource.uri.fsPath}`);
-		checkWorkspace(resource.uri);
+		output(`Active interpreter changed for resource: ${resource.uri.fsPath}. New intepreter: ${e.path}`);
+		// HACK This should ideally update depending on "resource.uri"
+		forEachRoot(folder => checkWorkspace(folder))
 	}
 }
 
