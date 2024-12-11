@@ -92,7 +92,7 @@
                         "type": "string"
                     },
                     "uniqueItems": true,
-                    "description": "List of paths to consider as roots, relative to the workspace folder. Each root is checked by its own mypy daemon. If not set, use the workspace folders. This is useful for monorepos when not in a normal multi-root workspace. This setting is ignored in multi-root workspaces."
+                    "description": "List of paths to consider as roots, relative to the workspace folder. Each root is checked by its own mypy daemon. In multi-root workspaces, should be defined per workspace folder."
                 },
                 "mypy.checkNotebooks": {
                     "type": "boolean",

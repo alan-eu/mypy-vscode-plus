@@ -412,13 +412,16 @@ async function killDaemon(folder: vscode.Uri, currentCheck: number | undefined, 
 	}
 }
 function getWorkspaceOrRootFolder(file: vscode.Uri): vscode.Uri | undefined {
-	// if the user has chosen custom roots with `mypy.roots`, and there is only one workspace folder, check those roots.
-	const mypyConfig = vscode.workspace.getConfiguration('mypy');
-	const roots = mypyConfig.get<string[]>("roots", []);
 	const normalizedFilePath = path.normalize(file.fsPath);
-	if (roots.length > 0 && vscode.workspace.workspaceFolders?.length === 1) {
-		const base = vscode.workspace.workspaceFolders[0];
-		const folders = roots.map(root => vscode.Uri.file(path.join(base.uri.fsPath, root)));
+	const workspace = vscode.workspace.getWorkspaceFolder(file);
+	if (workspace === undefined) {
+		return undefined;
+	}
+	const mypyConfig = vscode.workspace.getConfiguration('mypy', workspace);
+	const roots = mypyConfig.get<string[]>("roots", []);
+	
+	if (roots.length > 0) {
+		const folders = roots.map(root => vscode.Uri.file(path.join(workspace.uri.fsPath, root)));
 		for (const folder of folders) {
 			const normalizedRootPath = path.normalize(folder.fsPath);
 			if (normalizedFilePath.startsWith(normalizedRootPath)) {
@@ -427,21 +430,22 @@ function getWorkspaceOrRootFolder(file: vscode.Uri): vscode.Uri | undefined {
 		}
 		return undefined; 
 	} else {
-		return vscode.workspace.getWorkspaceFolder(file)?.uri;
+		return workspace.uri;
 	}
 }
 
 async function forEachRoot(func: (folder: vscode.Uri) => Promise<any>) {
-	// if the user has chosen custom roots with `mypy.roots`, and there is only one workspace folder, check those roots.
-	const mypyConfig = vscode.workspace.getConfiguration('mypy');
-	const roots = mypyConfig.get<string[]>("roots", []);
-	if (roots.length > 0 && vscode.workspace.workspaceFolders?.length === 1) {
-		const base = vscode.workspace.workspaceFolders[0];
-		const folders = roots.map(root => vscode.Uri.file(path.join(base.uri.fsPath, root)));
-		await forEachFolder(folders, func);
-	} else {
-		await forEachFolder(vscode.workspace.workspaceFolders?.map(it => it.uri), func);
-	}
+	const folders = vscode.workspace.workspaceFolders?.flatMap(workspace => {
+		const mypyConfig = vscode.workspace.getConfiguration('mypy', workspace);
+		const roots = mypyConfig.get<string[]>("roots", []);
+		if (roots.length > 0) {
+			return roots.map(root => vscode.Uri.file(path.join(workspace.uri.fsPath, root)));
+		} else {
+			return [workspace.uri]
+		}
+	});
+	
+	await forEachFolder(folders, func);
 }
 
 async function recheckWorkspace() {
