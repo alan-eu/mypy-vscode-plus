@@ -1,8 +1,6 @@
 import * as assert from "assert";
 
 import { mypyOutputPattern } from "./mypy";
-console.log("ASFASFASF");
-console.log(mypyOutputPattern);
 
 const mypyOutputTests = [
   [
