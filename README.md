@@ -1,3 +1,7 @@
+# Archived
+
+We no longer use Mypy and have since switched to Pyrefly. The extension in this repository still works but we will no longer maintain it.
+
 # 🍴 ⚠️ This is a fork
 
 This is a fork of Matan Gover's mypy extension with a few extras, including:
